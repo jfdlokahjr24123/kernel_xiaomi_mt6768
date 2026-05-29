@@ -4401,15 +4401,15 @@ void msdc_ops_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 /* ops.get_ro */
 static int msdc_ops_get_ro(struct mmc_host *mmc)
 {
-	struct msdc_host *host = mmc_priv(mmc);
-	void __iomem *base = host->base;
-	unsigned long flags;
-	int ro = 0;
+	//struct msdc_host *host = mmc_priv(mmc);
+	//void __iomem *base = host->base;
+	//unsigned long flags;
+	//int ro = 0;
 
-	if (host->hw->flags & MSDC_WP_PIN_EN)
-		ro = (MSDC_READ32(MSDC_PS) >> 31);
+	//if (host->hw->flags & MSDC_WP_PIN_EN)
+	//	ro = (MSDC_READ32(MSDC_PS) >> 31);
 
-	return ro;
+	return 0;
 }
 
 /* ops.get_cd */
