@@ -22,6 +22,7 @@
 #include <linux/irq.h>
 #include <linux/gpio.h>
 #include <linux/proc_fs.h>
+#include <linux/seq_file.h>
 #include <linux/input/mt.h>
 #include <linux/of_gpio.h>
 #include <linux/of_irq.h>
@@ -931,6 +932,117 @@ static void nvt_flash_proc_deinit(void)
 }
 #endif
 
+/*******************************************************
+Description:
+	Novatek touchscreen touch on/off flag proc. file node.
+	/proc/touch_flag, 1: enable touch, 0: disable touch.
+
+return:
+	n.a.
+*******************************************************/
+static uint8_t touch_flag = 1;
+static struct proc_dir_entry *touch_flag_proc_entry;
+
+static void nvt_touch_release_all_fingers(void)
+{
+	int32_t i = 0;
+
+	if (ts == NULL || ts->input_dev == NULL)
+		return;
+
+#if MT_PROTOCOL_B
+	for (i = 0; i < ts->max_touch_num; i++) {
+		input_mt_slot(ts->input_dev, i);
+		input_mt_report_slot_state(ts->input_dev, MT_TOOL_FINGER, false);
+	}
+#else
+	input_report_abs(ts->input_dev, ABS_MT_TRACKING_ID, -1);
+	input_mt_sync(ts->input_dev);
+#endif
+
+	input_report_key(ts->input_dev, BTN_TOUCH, 0);
+	input_sync(ts->input_dev);
+}
+
+static int nvt_touch_flag_proc_show(struct seq_file *m, void *v)
+{
+	seq_printf(m, "%d\n", touch_flag);
+
+	return 0;
+}
+
+static ssize_t nvt_touch_flag_proc_write(struct file *file, const char __user *buffer,
+	size_t count, loff_t *ppos)
+{
+	char buf[8] = {0};
+	uint8_t val = 0;
+
+	if (count >= sizeof(buf))
+		count = sizeof(buf) - 1;
+
+	if (copy_from_user(buf, buffer, count))
+		return -EFAULT;
+
+	buf[count] = '\0';
+	if (buf[count - 1] == '\n')
+		buf[count - 1] = '\0';
+
+	if (kstrtou8(buf, 10, &val) || val > 1)
+		return -EINVAL;
+
+	if (val == touch_flag)
+		return count;
+
+	if (val == 0) {
+		touch_flag = 0;
+		nvt_irq_enable(false);
+		nvt_touch_release_all_fingers();
+		NVT_LOG("touch disabled\n");
+	} else {
+		touch_flag = 1;
+		if (ts != NULL)
+			nvt_irq_enable(true);
+		NVT_LOG("touch enabled\n");
+	}
+
+	return count;
+}
+
+static int nvt_touch_flag_proc_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, nvt_touch_flag_proc_show, inode->i_private);
+}
+
+static const struct file_operations nvt_touch_flag_fops = {
+	.owner = THIS_MODULE,
+	.open = nvt_touch_flag_proc_open,
+	.read = seq_read,
+	.write = nvt_touch_flag_proc_write,
+	.release = single_release,
+};
+
+static int32_t nvt_touch_flag_proc_init(void)
+{
+	touch_flag_proc_entry = proc_create("touch_flag", 0644, NULL, &nvt_touch_flag_fops);
+	if (touch_flag_proc_entry == NULL) {
+		NVT_ERR("create /proc/touch_flag Failed!\n");
+		return -ENOMEM;
+	}
+
+	NVT_LOG("create /proc/touch_flag Succeeded!\n");
+
+	return 0;
+}
+
+static void nvt_touch_flag_proc_deinit(void)
+{
+	if (touch_flag_proc_entry != NULL) {
+		remove_proc_entry("touch_flag", NULL);
+		touch_flag_proc_entry = NULL;
+		NVT_LOG("Removed /proc/%s\n", "touch_flag");
+	}
+}
+
 #if WAKEUP_GESTURE
 #define GESTURE_WORD_C			 12
 #define GESTURE_WORD_W			 13
@@ -1310,6 +1422,9 @@ static irqreturn_t nvt_ts_work_func(int irq, void *data)
 #endif /* MT_PROTOCOL_B */
 	int32_t i = 0;
 	int32_t finger_cnt = 0;
+
+	if (touch_flag == 0)
+		return IRQ_HANDLED;
 
 #if WAKEUP_GESTURE
 #ifdef CONFIG_PM
@@ -1820,6 +1935,13 @@ static int32_t nvt_ts_probe(struct spi_device *client)
 	}
 #endif
 
+	touch_flag = 1;
+	ret = nvt_touch_flag_proc_init();
+	if (ret != 0) {
+		NVT_ERR("nvt touch flag proc init failed. ret=%d\n", ret);
+		goto err_touch_flag_proc_init_failed;
+	}
+
 #if NVT_LOCKDOWN
 	ret = nvt_proc_tp_lockdown_info();
 	if (ret != 0) {
@@ -1898,6 +2020,8 @@ err_register_early_suspend_failed:
 nvt_mp_proc_deinit();
 err_mp_proc_init_failed:
 #endif
+nvt_touch_flag_proc_deinit();
+err_touch_flag_proc_init_failed:
 #if NVT_TOUCH_EXT_PROC
 nvt_extra_proc_deinit();
 err_extra_proc_init_failed:
@@ -1991,6 +2115,7 @@ static int32_t nvt_ts_remove(struct spi_device *client)
 #if NVT_TOUCH_MP
 	nvt_mp_proc_deinit();
 #endif
+	nvt_touch_flag_proc_deinit();
 #if NVT_TOUCH_EXT_PROC
 	nvt_extra_proc_deinit();
 #endif
@@ -2067,6 +2192,7 @@ static void nvt_ts_shutdown(struct spi_device *client)
 #if NVT_TOUCH_MP
 	nvt_mp_proc_deinit();
 #endif
+	nvt_touch_flag_proc_deinit();
 #if NVT_TOUCH_EXT_PROC
 	nvt_extra_proc_deinit();
 #endif
@@ -2233,7 +2359,8 @@ static int32_t nvt_ts_resume(struct device *dev)
 	}
 
 #if !WAKEUP_GESTURE
-	nvt_irq_enable(true);
+	if (touch_flag)
+		nvt_irq_enable(true);
 #endif
 
 #if NVT_TOUCH_ESD_PROTECT
