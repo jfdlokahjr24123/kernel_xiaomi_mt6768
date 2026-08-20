@@ -1690,9 +1690,15 @@ void nvt_mp_proc_deinit(void)
 	nvt_mp_buffer_deinit();
 
 	if (NVT_proc_selftest_entry != NULL) {
-		remove_proc_entry("nvt_selftest", NULL);
+		remove_proc_entry("nvt_selftest", proc_android_touch_entry);
 		NVT_proc_selftest_entry = NULL;
 		NVT_LOG("Removed /proc/%s\n", "nvt_selftest");
+	}
+
+	if (proc_android_touch_entry != NULL) {
+		remove_proc_entry("android_touch", NULL);
+		proc_android_touch_entry = NULL;
+		NVT_LOG("Removed /proc/%s\n", "android_touch");
 	}
 }
 #endif /* #if NVT_TOUCH_MP */
